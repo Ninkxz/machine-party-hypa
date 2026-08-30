@@ -50,6 +50,46 @@ var total_score_by_network_id: Dictionary[int, int]
 var round_score_by_network_id: Dictionary[int, int]
 var game_score_by_network_id: Dictionary[int, int]
 
+# --- HYPA MOD: rubber-band catch-up ------------------------------------------
+# The bottom half of the standings earns a per-player score multiplier so they
+# can seriously claw back, without flipping the game on its head. The boost is
+# zero for the top half and scales with TWO things:
+#   * how far behind the leader you are (a tied-for-median player gets ~nothing;
+#     a last-place blowout gets the most), and
+#   * the lobby size (a 2-player duel barely rubber-bands; a full 8-player pack
+#     rubber-bands hard, because one runaway leader is far more punishing there).
+# Capped at HYPA_CATCHUP_MAX so it is a leg-up, never a takeover. Computed from
+# total_score_by_network_id, which during a round still holds the PRE-round
+# standings (update_scores() folds the round in only at the score screen), so
+# the basis is stable for the whole round.
+const HYPA_CATCHUP_MAX: float = 2.0     # hardest possible boost (2.0 = double points)
+
+func _hypa_catchup(network_id: int) -> float:
+	var scores := total_score_by_network_id
+	var roster := scores.size()
+	if roster < 2 or not scores.has(network_id):
+		return 1.0
+	var mine: int = scores[network_id]
+	var leader: int = mine
+	var ranked := scores.values()
+	ranked.sort()                                   # ascending
+	for v in ranked:
+		if v > leader: leader = v
+	# bottom half only: your rank index in the ascending list must be below the median
+	var below: int = 0
+	for v in ranked:
+		if v < mine: below += 1
+	if below >= roster / 2:                          # you are in the TOP half -> no boost
+		return 1.0
+	# gap: 0.0 tied with leader .. 1.0 lapped
+	var gap: float = 0.0
+	if leader > 0:
+		gap = clampf(float(leader - mine) / float(leader), 0.0, 1.0)
+	# roster scale: 2 players -> 0.30, 8 players -> 1.00
+	var roster_scale: float = clampf(float(roster - 2) / 6.0, 0.0, 1.0) * 0.7 + 0.3
+	var boost: float = 1.0 + (HYPA_CATCHUP_MAX - 1.0) * gap * roster_scale
+	return clampf(boost, 1.0, HYPA_CATCHUP_MAX)
+
 var games_played_count: int = 0
 var total_games_count: int = 0
 
@@ -321,13 +361,13 @@ func _on_minigame_ready(_network_id: int):
 	)
 
 func _on_minigame_player_scored(_network_id: int, _score: int):
-	round_score_by_network_id[_network_id] += (_score * score_multiplier)
+	round_score_by_network_id[_network_id] += int(round(_score * score_multiplier * _hypa_catchup(_network_id)))
 
 func _on_minigame_player_score_finalized(player_scores):
 
 	for network_id in player_scores.keys():
 		if round_score_by_network_id.has(network_id):
-			round_score_by_network_id[network_id] += player_scores[network_id] * score_multiplier
+			round_score_by_network_id[network_id] += int(round(player_scores[network_id] * score_multiplier * _hypa_catchup(network_id)))
 
 func _on_score_screen_finished():
 
