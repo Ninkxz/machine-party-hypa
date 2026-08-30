@@ -24,6 +24,26 @@ var player_count: int = 0
 
 var playing: bool = false
 
+# --- HYPA MOD: anti-hog hold budget ------------------------------------------
+# Problem: the shipped fuse is a hard cap on time-from-arming, never reset by a
+# throw, so a player can babysit the device risk-free and lob it at the last
+# second. This removes the hot-potato tension. Fix: every player gets a
+# CUMULATIVE hold budget per round. Time spent as the device's current victim
+# is debited from it; blow the budget and the device is retargeted onto you
+# with a near-zero fuse, so the game's OWN kill executes you. No new kill RPC
+# is authored - we reuse choose_new_target()/activation_duration, the same
+# host-only path the 8P pace change proved across eight peers.
+#
+# "Who is the current victim" is inferred host-side from proximity to the
+# device (the attach range), NOT read from vanilla device internals, so no
+# decompiled-property guess can desync. Blood escalation hooks _hypa_gore()
+# (below) which is currently a no-op stub pending the synced-VFX pass.
+const HYPA_HOLD_BUDGET: float = 10.0     # seconds of cumulative holding before death
+const HYPA_ATTACH_RANGE: float = 2.2     # how close the device counts as "on" a player
+const HYPA_EXECUTE_FUSE: float = 0.35    # fuse forced onto a budget-blown player
+var _hypa_hold: Dictionary[int, float] = {}   # network_id -> cumulative seconds held
+var _hypa_condemned: Array[int] = []          # already sentenced this round (avoid double-fire)
+
 # --- 8P MOD: spawn audit (diagnostic) -----------------------------------------
 # Gated behind -localtest; no gameplay effect at any roster size.
 #
@@ -173,6 +193,10 @@ func _physics_process(_delta: float) -> void :
 	if not playing:
 		return
 
+	# HYPA: debit the current victim's hold budget and sentence over-holders.
+	if multiplayer.is_server():
+		_hypa_track_hold(_delta)
+
 	for p in players_node.get_children():
 		if not p.active:
 			continue
@@ -209,6 +233,10 @@ func initialize(_round_number: int, _total_rounds: int, _scores: Dictionary = {}
 	super.initialize(_round_number, _total_rounds, _scores)
 
 	spawn_players()
+
+	# HYPA: fresh hold budgets each round.
+	_hypa_hold.clear()
+	_hypa_condemned.clear()
 
 	round_number = _round_number
 	total_rounds = _total_rounds
@@ -388,3 +416,51 @@ func _on_player_died(_network_id: int):
 	await get_tree().create_timer(1.0).timeout
 
 	check_game_end()
+
+
+# --- HYPA MOD: hold-budget tracker (host-only) --------------------------------
+func _hypa_current_victim() -> SpineBreakerPlayer:
+	# Infer the attached player by proximity to the device. Robust against
+	# vanilla internals and matches what a watching human calls "who has it".
+	var best: SpineBreakerPlayer = null
+	var best_d: float = HYPA_ATTACH_RANGE
+	var dev_pos: Vector3 = device.global_position
+	for p in active_players.values():
+		if not is_instance_valid(p) or not p.active:
+			continue
+		var d: float = dev_pos.distance_to(p.global_position)
+		if d < best_d:
+			best_d = d
+			best = p
+	return best
+
+func _hypa_track_hold(delta: float) -> void:
+	var victim := _hypa_current_victim()
+	if victim == null:
+		return
+	var id: int = victim.get_multiplayer_authority()
+	if _hypa_condemned.has(id):
+		return
+	var held: float = _hypa_hold.get(id, 0.0) + delta
+	_hypa_hold[id] = held
+
+	# escalating gore as the budget burns (stub until synced-VFX pass).
+	_hypa_gore(victim, clampf(held / HYPA_HOLD_BUDGET, 0.0, 1.0))
+
+	if held >= HYPA_HOLD_BUDGET:
+		_hypa_condemned.append(id)
+		# Reuse the vanilla kill: point the device at this player with a near-zero
+		# fuse so the shipped fuse-expiry mechanic eliminates them. Same host-only
+		# path as choose_new_target(); no bespoke kill RPC.
+		if _mod_vanilla_fuse > 0.0:
+			device.activation_duration = HYPA_EXECUTE_FUSE
+		device.state_machine.transition_to(&"Follow", {"target": victim, "new_target": true})
+		device.start_timer()
+		if Array(OS.get_cmdline_args()).has("-localtest"):
+			print("[HYPA] hold-budget blown id=", id, " held=%.1f" % held, " -> execute")
+
+# Escalating blood, 0.0 (clean) .. 1.0 (budget spent). No-op until the synced
+# blood-VFX pass wires the shipped gore assets (hit_blood/bloodmist/blood_splat)
+# through a MultiplayerSpawner so every peer sees it. Rule works without it.
+func _hypa_gore(_victim: SpineBreakerPlayer, _t: float) -> void:
+	pass
