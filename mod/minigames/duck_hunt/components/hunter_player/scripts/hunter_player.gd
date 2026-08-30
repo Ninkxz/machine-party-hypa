@@ -18,95 +18,30 @@ class_name DuckHuntHunterPlayer
 @export var hand_meshes: Array[MeshInstance3D]
 @export var laser_mesh: MeshInstance3D
 
-# 8-PLAYER MOD: keys 4-7 added. `duck_count` is the roster minus the hunter, so
-# vanilla only ever needed 0-3; above that `.get(duck_count, 7)` in
-# set_active_rpc() fell back to SEVEN shells and a 0.95 cycle - fewer rounds and
-# a slower bolt than the hunter gets against three ducks. The curve inverted
-# exactly where the pressure went up.
-#
-# The added values continue the shipped slope rather than inventing one: the
-# shipped points step 7 -> 8 -> 10, i.e. +1 then +2 per duck, so +2 carries on.
-# Reload continues its own -0.05 / -0.10 trend and is floored at 0.45 so the
-# bolt animation still reads.
-#
-#   ducks   1     2     3   |   4     5     6     7
-#   mag     7     8    10   |  12    14    16    18
-#   cycle  0.95  0.90  0.80 | 0.70  0.60  0.50  0.45
-#
-# Keys 0-3 are byte-identical to vanilla, so a 1-4 player game is untouched.
-# hunter_player.tscn does not override either dictionary, so these script
-# defaults are what actually run - re-check that after a game update.
 @export var magazine_capacity_by_duck_count: Dictionary[int, int] = {
-	0: 7,
-	1: 7,
-	2: 8,
-	3: 10,
-	4: 12,
-	5: 14,
-	6: 16,
-	7: 18,
+	# HYPA: vanilla only keyed 0-3, so 4-7 ducks (5-8 players) silently fell back
+	# to the base 7 - a near-impossible sniper seat. Extend it so ammo scales.
+	0: 7, 
+	1: 7, 
+	2: 8, 
+	3: 10, 
+	4: 12, 
+	5: 13, 
+	6: 14, 
+	7: 15, 
 }
 @export var reload_speed_by_duck_count: Dictionary[int, float] = {
-	0: 0.95,
-	1: 0.95,
-	2: 0.9,
-	3: 0.8,
-	4: 0.7,
-	5: 0.6,
-	6: 0.5,
-	7: 0.45,
+	# HYPA: lower = faster between shots. Extended 4-7 so the hunter fires quicker
+	# with more players (more ducks to drop). Was capped at key 3.
+	0: 0.95, 
+	1: 0.95, 
+	2: 0.9, 
+	3: 0.8, 
+	4: 0.72, 
+	5: 0.66, 
+	6: 0.6, 
+	7: 0.55, 
 }
-
-# 8-PLAYER MOD: the shortened cycle above outran the rifle animations.
-#
-# `shoot()` waits MOD_POST_SHOT_DELAY, plays the bolt, waits `cycle_time`, then
-# re-enables firing. Nothing else touches `anim_rig` at the moment of a shot -
-# the recoil is a tween on `recoil_progress`, not an animation - so the bolt
-# actually keeps playing until the NEXT `anim_rig.play()`, which lands another
-# MOD_POST_SHOT_DELAY after the next shot. The window is therefore
-# `cycle_time + MOD_POST_SHOT_DELAY`, not `cycle_time`, and that extra half
-# second is exactly why the shipped duck counts look right and the added ones
-# did not:
-#
-#   ducks  cycle  window  speed needed
-#     0-2   0.95    1.45     0.839   fits - shipped
-#       3   0.80    1.30     0.936   fits - shipped
-#       4   0.70    1.20     1.014   clipped - mod
-#       5   0.60    1.10     1.106   clipped - mod
-#       6   0.50    1.00     1.217   clipped - mod
-#       7   0.45    0.95     1.281   clipped - mod
-#
-# `rifle_pull_bolt_overwrite` is 1.2167s and `rifle_reload_main_overwrite` is
-# 4.0167s - measured out of the binary `.res` files, not guessed; the technique
-# is written up in UPDATING.md.
-#
-# `_mod_play_to_fit()` raises playback speed only when the animation genuinely
-# does not fit, so at 0-3 ducks it passes exactly 1.0 and the call is equivalent
-# to vanilla's bare `play(name)`. **1-4 player parity therefore holds by
-# construction** - there is no roster check here and none is needed.
-const MOD_POST_SHOT_DELAY: float = 0.5
-
-# Vanilla's own attempt at this arithmetic, kept so the reload window stays
-# expressed in the developers' terms. Their `3.8 - 0.95` subtracts the FALLBACK
-# cycle time, so it silently drifts as soon as the real cycle differs.
-const MOD_RELOAD_WAIT: float = 3.8 - 0.95
-
-# Reads the length off the animation rather than hardcoding it, so a retimed
-# animation on a future game update corrects itself. Returns the speed used so
-# the trace can report it.
-func _mod_play_to_fit(_anim_name: String, _window: float) -> float:
-
-	var speed: float = 1.0
-
-	if anim_rig != null and anim_rig.has_animation(_anim_name):
-		var anim: Animation = anim_rig.get_animation(_anim_name)
-		if anim != null and _window > 0.0 and anim.length > _window:
-			speed = anim.length / _window
-	else:
-		push_warning("[DUCK8] anim_rig has no animation '%s'" % _anim_name)
-
-	anim_rig.play(_anim_name, -1, speed)
-	return speed
 
 @export_category("Zoom")
 @export var zoom_fovs: Array[float] = [
@@ -467,9 +402,6 @@ func shoot():
 		if GameManager.local_game or (multiplayer.get_unique_id() == get_multiplayer_authority()):
 			speaker_rack_rifle.play()
 
-	# 8P MOD: this literal is coupled to MOD_POST_SHOT_DELAY - if the developers
-	# retime it on an update, change the constant to match or the animation
-	# windows below are computed against the wrong figure.
 	await get_tree().create_timer(0.5).timeout
 	if unzoom_after_shot:
 		zoom_fov_index = 0
@@ -477,36 +409,26 @@ func shoot():
 
 	num_of_current_rounds_in_magazine -= 1
 
-	# 8P MOD: hoisted above the play() calls, which need it to size the animation
-	# window. Pure reordering - it reads only `duck_count`.
-	var cycle_time = reload_speed_by_duck_count.get(duck_count, 0.95)
-
 	if num_of_current_rounds_in_magazine == 0:
-		await reload(cycle_time)
+		await reload()
 	else:
-		# The bolt keeps playing until the next shot's play() call, one
-		# MOD_POST_SHOT_DELAY after firing resumes - hence the + here.
-		_mod_play_to_fit("rifle_pull_bolt_overwrite",
-			cycle_time + MOD_POST_SHOT_DELAY)
+		anim_rig.play("rifle_pull_bolt_overwrite")
 
+
+	var cycle_time = reload_speed_by_duck_count.get(duck_count, 0.95)
 	await get_tree().create_timer(cycle_time).timeout
 	if return_to_zoom_after_shot:
 		zoom_fov_index = zoom_index
 		update_zoom(zoom_index > 0)
 	can_shoot = true
 
-func reload(_cycle_time: float = 0.95):
+func reload():
 	if GameManager.local_game or (multiplayer.get_unique_id() == get_multiplayer_authority()):
 		play_reload_sound_rpc.rpc()
 	can_shoot = false
-	# 8P MOD: same clipping as the bolt, milder - the reload animation is
-	# 4.0167s against a window of 4.15s at three ducks (fits) but 3.80s at seven
-	# (needs 1.057x). The default argument keeps the old signature working for
-	# any caller that does not pass a cycle time.
-	_mod_play_to_fit("rifle_reload_main_overwrite",
-		MOD_RELOAD_WAIT + _cycle_time + MOD_POST_SHOT_DELAY)
+	anim_rig.play("rifle_reload_main_overwrite")
 	num_of_current_rounds_in_magazine = magazine_capacity
-	await get_tree().create_timer(MOD_RELOAD_WAIT, false).timeout
+	await get_tree().create_timer(3.8 - 0.95, false).timeout
 
 func update_laser():
 
@@ -624,27 +546,6 @@ func set_active_rpc(_active: bool) -> void :
 		duck_count, 7
 	)
 	num_of_current_rounds_in_magazine = magazine_capacity
-
-	# 8P MOD: runs on every peer (call_local + broadcast from play_state), so a
-	# client log proves the count reached it. A magazine of 7 at four or more
-	# ducks means the dictionary lookup missed and the fallback fired.
-	if Array(OS.get_cmdline_args()).has("-localtest"):
-		var mod_cycle: float = reload_speed_by_duck_count.get(duck_count, 0.95)
-		var mod_window: float = mod_cycle + MOD_POST_SHOT_DELAY
-		var mod_len: float = -1.0
-		var mod_speed: float = 1.0
-		if anim_rig != null and anim_rig.has_animation("rifle_pull_bolt_overwrite"):
-			mod_len = anim_rig.get_animation("rifle_pull_bolt_overwrite").length
-			if mod_len > mod_window:
-				mod_speed = mod_len / mod_window
-		print("[DUCK8] hunter is_server=", multiplayer.is_server(),
-			" peer=", multiplayer.get_unique_id(),
-			" ducks=", duck_count,
-			" magazine=", magazine_capacity,
-			" cycle=%.2f" % mod_cycle,
-			" bolt_len=%.4f" % mod_len,
-			" bolt_window=%.2f" % mod_window,
-			" bolt_speed=%.3f" % mod_speed)
 
 @rpc("any_peer", "call_local", "reliable")
 func set_player_presence(network_id: int) -> void :

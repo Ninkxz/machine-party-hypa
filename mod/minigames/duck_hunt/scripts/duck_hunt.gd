@@ -427,17 +427,13 @@ func spawn_players():
 	hunter_player_spawn_parent.add_child(hunter_player_character, true)
 
 	hunter_player_character.set_player_presence.rpc(player_presence.network_id)
-	# HYPA MOD: give the lone hunter a roster-scaled ammo buff. The magazine is
-	# derived inside the vanilla hunter from the count passed here; the DUCKS are
-	# spawned from `duck_players` in the loop above, independent of this number,
-	# so inflating it only grows the magazine - no extra ducks. At 8 players the
-	# hunter has 7 fast-moving ducks to drop and vanilla ammo made that a coin
-	# flip; +1 shot per duck (so ~double at a full lobby, unchanged at 1v1) turns
-	# the sniper seat into a real chance instead of a near-guaranteed loss.
-	var hypa_ammo: int = duck_player_count + duck_player_count
+	# HYPA: pass the true duck count; the ammo/fire-rate buff now lives in the
+	# extended dictionaries in hunter_player.gd (keyed by this count), which the
+	# broken "inflate the count" approach could not reach - keys >3 fell back to
+	# the base magazine. Real count + extended dicts = correct scaling on every peer.
 	hunter_player_character.setup_rpc.rpc(
 		hunter_player_spawn_position.global_position, 
-		hypa_ammo
+		duck_player_count
 	)
 
 	var hunter_initialization_delay = 8.0
