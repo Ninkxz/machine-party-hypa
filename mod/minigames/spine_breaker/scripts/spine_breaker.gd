@@ -38,9 +38,7 @@ var playing: bool = false
 # device (the attach range), NOT read from vanilla device internals, so no
 # decompiled-property guess can desync. Blood escalation hooks _hypa_gore()
 # (below) which is currently a no-op stub pending the synced-VFX pass.
-const HYPA_HOLD_BUDGET: float = 10.0     # seconds of cumulative holding before death
-const HYPA_ATTACH_RANGE: float = 2.2     # how close the device counts as "on" a player
-const HYPA_EXECUTE_FUSE: float = 0.35    # fuse forced onto a budget-blown player
+const HYPA_HOLD_BUDGET: float = 7.0     # seconds of cumulative holding before death
 var _hypa_hold: Dictionary[int, float] = {}   # network_id -> cumulative seconds held
 var _hypa_condemned: Array[int] = []          # already sentenced this round (avoid double-fire)
 
