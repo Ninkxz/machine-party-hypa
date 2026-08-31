@@ -38,9 +38,11 @@ var playing: bool = false
 # device (the attach range), NOT read from vanilla device internals, so no
 # decompiled-property guess can desync. Blood escalation hooks _hypa_gore()
 # (below) which is currently a no-op stub pending the synced-VFX pass.
-const HYPA_HOLD_BUDGET: float = 7.0     # seconds of cumulative holding before death
+const HYPA_HOLD_BUDGET: float = 6.0     # seconds of cumulative holding before death
 var _hypa_hold: Dictionary[int, float] = {}   # network_id -> cumulative seconds held
 var _hypa_condemned: Array[int] = []          # already sentenced this round (avoid double-fire)
+var _hypa_heat_accum: float = 0.0             # throttle for the heat-glow RPC
+var _hypa_last_heat: float = -1.0             # last broadcast fill, to skip no-op sends
 
 # --- 8P MOD: spawn audit (diagnostic) -----------------------------------------
 # Gated behind -localtest; no gameplay effect at any roster size.
@@ -431,6 +433,9 @@ func _hypa_current_victim() -> SpineBreakerPlayer:
 func _hypa_track_hold(delta: float) -> void:
 	var victim := _hypa_current_victim()
 	if victim == null:
+		if _hypa_last_heat > 0.0:
+			_hypa_last_heat = 0.0
+			_hypa_heat_rpc.rpc(0.0)
 		return
 	var id: int = victim.get_multiplayer_authority()
 	if _hypa_condemned.has(id):
@@ -438,8 +443,15 @@ func _hypa_track_hold(delta: float) -> void:
 	var held: float = _hypa_hold.get(id, 0.0) + delta
 	_hypa_hold[id] = held
 
-	# escalating gore as the budget burns (stub until synced-VFX pass).
-	_hypa_gore(victim, clampf(held / HYPA_HOLD_BUDGET, 0.0, 1.0))
+	var frac: float = clampf(held / HYPA_HOLD_BUDGET, 0.0, 1.0)
+	_hypa_gore(victim, frac)
+	# INDICATOR: ramp the spider's light white -> red as THIS holder's budget
+	# fills, throttled to ~6 Hz. Purely visual; if the RPC drops, no harm.
+	_hypa_heat_accum += delta
+	if _hypa_heat_accum >= 0.15 or absf(frac - _hypa_last_heat) >= 0.2:
+		_hypa_heat_accum = 0.0
+		_hypa_last_heat = frac
+		_hypa_heat_rpc.rpc(frac)
 
 	if held >= HYPA_HOLD_BUDGET:
 		_hypa_condemned.append(id)
@@ -454,5 +466,17 @@ func _hypa_track_hold(delta: float) -> void:
 # Escalating blood, 0.0 (clean) .. 1.0 (budget spent). No-op until the synced
 # blood-VFX pass wires the shipped gore assets (hit_blood/bloodmist/blood_splat)
 # through a MultiplayerSpawner so every peer sees it. Rule works without it.
+@rpc("authority", "call_local", "unreliable")
+func _hypa_heat_rpc(t: float) -> void:
+	# INDICATOR (runs on every peer): glow the spider's status light from its
+	# normal colour to red as the current holder's cumulative hold approaches the
+	# limit. Visible to everyone; the spider reddening = the hold budget is
+	# filling, which is also the proof the tracker is running.
+	if not is_instance_valid(device) or device.status_light == null:
+		return
+	device.status_light.light_color = Color(1.0, 1.0, 1.0).lerp(Color(1.0, 0.05, 0.05), t)
+	device.status_light.light_energy = lerpf(1.0, 5.0, t)
+
+
 func _hypa_gore(_victim: SpineBreakerPlayer, _t: float) -> void:
 	pass
