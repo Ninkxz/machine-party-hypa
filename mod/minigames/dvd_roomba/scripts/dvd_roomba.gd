@@ -8,6 +8,8 @@ const player_scene = preload("uid://w6wpt3kvl74p")
 @export_category("Variables")
 @export var max_roomba_count: int = 5
 @export var roomba_spawn_interval: float = 7.5   # HYPA: slower spawns -> longer rounds (was 5.0)
+const HYPA_CORNER_CHANCE: float = 0.75           # HYPA: fraction of spawns that come from a corner
+const HYPA_CORNER_PUSH: float = 1.12             # HYPA: >1 pushes the corner spawn outward for a clean exit
 
 @export_category("Components")
 @export var blood_handler: DvdRoombaFloorBloodHandler
@@ -193,8 +195,11 @@ func spawn_roomba():
 	var direction: Vector3
 	var angle: int
 
-	if markers.size() > 0 and randf() < 0.5:
-		# corner spawn: build the bbox of the side markers, pick a corner, aim in
+	if markers.size() > 0 and randf() < HYPA_CORNER_CHANCE:
+		# corner spawn: bbox of the side markers gives the four corners. Push each
+		# one outward (HYPA_CORNER_PUSH) so it emerges cleanly FROM the corner
+		# rather than slightly inside, and give it an exact 45-deg diagonal aimed
+		# inward - the same clean angles the vanilla side roombas use.
 		var mn := Vector3(INF, 0.0, INF)
 		var mx := Vector3(-INF, 0.0, -INF)
 		var y := 0.0
@@ -203,18 +208,22 @@ func spawn_roomba():
 			y = p.y
 			mn.x = minf(mn.x, p.x); mn.z = minf(mn.z, p.z)
 			mx.x = maxf(mx.x, p.x); mx.z = maxf(mx.z, p.z)
-		var corners := [
-			Vector3(mn.x, y, mn.z), Vector3(mx.x, y, mn.z),
-			Vector3(mx.x, y, mx.z), Vector3(mn.x, y, mx.z),
-		]
-		spawn_pos = corners.pick_random()
 		var centre := Vector3((mn.x + mx.x) * 0.5, y, (mn.z + mx.z) * 0.5)
-		direction = (centre - spawn_pos)
-		direction.y = 0.0
-		direction = direction.normalized()
-		if direction.length() < 0.01:
-			direction = Vector3(1, 0, 1).normalized()
-		angle = int(round(rad_to_deg(atan2(direction.z, direction.x))))
+		# [corner position, exact inward diagonal angle]
+		var picks := [
+			[Vector3(mn.x, y, mn.z), 45],   # min,min -> head +x,+z
+			[Vector3(mx.x, y, mn.z), 135],  # max,min -> head -x,+z
+			[Vector3(mx.x, y, mx.z), 225],  # max,max -> head -x,-z
+			[Vector3(mn.x, y, mx.z), 315],  # min,max -> head +x,-z
+		]
+		var pick = picks.pick_random()
+		var corner: Vector3 = pick[0]
+		# push outward from centre so the spawn sits right in the corner
+		spawn_pos = centre + (corner - centre) * HYPA_CORNER_PUSH
+		spawn_pos.y = y
+		angle = pick[1]
+		var rot := deg_to_rad(float(angle))
+		direction = Vector3(cos(rot), 0.0, sin(rot))
 	else:
 		# vanilla side spawn
 		var position = markers.pick_random()
