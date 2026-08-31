@@ -43,7 +43,7 @@ DID IT WORK?
 ------------
 Launch the game and look at the version in the corner of the main menu:
 
-  v2.1.2-8P-v1.5    <- mod is active
+  v2.1.2-8P-hypa-v1.2  <- mod is active
   v2.1.2            <- still the original
 
 Or check without launching:
