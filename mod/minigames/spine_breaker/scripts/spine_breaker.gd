@@ -420,19 +420,15 @@ func _on_player_died(_network_id: int):
 
 # --- HYPA MOD: hold-budget tracker (host-only) --------------------------------
 func _hypa_current_victim() -> SpineBreakerPlayer:
-	# Infer the attached player by proximity to the device. Robust against
-	# vanilla internals and matches what a watching human calls "who has it".
-	var best: SpineBreakerPlayer = null
-	var best_d: float = HYPA_ATTACH_RANGE
-	var dev_pos: Vector3 = device.global_position
-	for p in active_players.values():
-		if not is_instance_valid(p) or not p.active:
-			continue
-		var d: float = dev_pos.distance_to(p.global_position)
-		if d < best_d:
-			best_d = d
-			best = p
-	return best
+	# The device tracks its attached player directly (spine_breaker_device.gd:
+	# `var attached_to: SpineBreakerPlayer`, set in attached_state, cleared to
+	# null on throw / detach). Reading it is exact - the earlier proximity guess
+	# was the bug: the device parks the attached player at y=-100, so distance
+	# never matched and the budget never accrued.
+	var v = device.attached_to
+	if v != null and is_instance_valid(v):
+		return v
+	return null
 
 func _hypa_track_hold(delta: float) -> void:
 	var victim := _hypa_current_victim()
@@ -449,15 +445,13 @@ func _hypa_track_hold(delta: float) -> void:
 
 	if held >= HYPA_HOLD_BUDGET:
 		_hypa_condemned.append(id)
-		# Reuse the vanilla kill: point the device at this player with a near-zero
-		# fuse so the shipped fuse-expiry mechanic eliminates them. Same host-only
-		# path as choose_new_target(); no bespoke kill RPC.
-		if _mod_vanilla_fuse > 0.0:
-			device.activation_duration = HYPA_EXECUTE_FUSE
-		device.state_machine.transition_to(&"Follow", {"target": victim, "new_target": true})
-		device.start_timer()
+		# Kill via the shipped BreakSpine state - exactly what the fuse timeout
+		# does (attached_state._on_activation_timer_timeout -> transition_to
+		# "BreakSpine"), whose enter() calls target.break_spine_rpc(). Host-only,
+		# and it replicates the kill to every peer for free.
+		device.state_machine.transition_to(&"BreakSpine", {"target": victim})
 		if Array(OS.get_cmdline_args()).has("-localtest"):
-			print("[HYPA] hold-budget blown id=", id, " held=%.1f" % held, " -> execute")
+			print("[HYPA] hold-budget blown id=", id, " held=%.1f" % held, " -> BreakSpine")
 
 # Escalating blood, 0.0 (clean) .. 1.0 (budget spent). No-op until the synced
 # blood-VFX pass wires the shipped gore assets (hit_blood/bloodmist/blood_splat)
