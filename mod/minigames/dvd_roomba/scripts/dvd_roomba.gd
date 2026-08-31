@@ -7,7 +7,7 @@ const player_scene = preload("uid://w6wpt3kvl74p")
 
 @export_category("Variables")
 @export var max_roomba_count: int = 5
-@export var roomba_spawn_interval: float = 5.0
+@export var roomba_spawn_interval: float = 7.5   # HYPA: slower spawns -> longer rounds (was 5.0)
 
 @export_category("Components")
 @export var blood_handler: DvdRoombaFloorBloodHandler
@@ -184,22 +184,52 @@ func spawn_players():
 		counter += 1
 
 func spawn_roomba():
-	var spawn_positions = roomba_spawn_parent_node.get_children()
-	var position = spawn_positions.pick_random()
+	# HYPA: roombas now launch from the CORNERS as well as the side markers.
+	# Corners are derived from the bounding box of the shipped side spawns (no
+	# new scene nodes, no new art - same roomba), and a corner roomba is aimed
+	# diagonally INWARD toward the arena centre so it sweeps the floor.
+	var markers = roomba_spawn_parent_node.get_children()
+	var spawn_pos: Vector3
+	var direction: Vector3
+	var angle: int
+
+	if markers.size() > 0 and randf() < 0.5:
+		# corner spawn: build the bbox of the side markers, pick a corner, aim in
+		var mn := Vector3(INF, 0.0, INF)
+		var mx := Vector3(-INF, 0.0, -INF)
+		var y := 0.0
+		for m in markers:
+			var p: Vector3 = (m as Node3D).global_position
+			y = p.y
+			mn.x = minf(mn.x, p.x); mn.z = minf(mn.z, p.z)
+			mx.x = maxf(mx.x, p.x); mx.z = maxf(mx.z, p.z)
+		var corners := [
+			Vector3(mn.x, y, mn.z), Vector3(mx.x, y, mn.z),
+			Vector3(mx.x, y, mx.z), Vector3(mn.x, y, mx.z),
+		]
+		spawn_pos = corners.pick_random()
+		var centre := Vector3((mn.x + mx.x) * 0.5, y, (mn.z + mx.z) * 0.5)
+		direction = (centre - spawn_pos)
+		direction.y = 0.0
+		direction = direction.normalized()
+		if direction.length() < 0.01:
+			direction = Vector3(1, 0, 1).normalized()
+		angle = int(round(rad_to_deg(atan2(direction.z, direction.x))))
+	else:
+		# vanilla side spawn
+		var position = markers.pick_random()
+		spawn_pos = (position as Node3D).global_position
+		angle = [45, 135, 225, 315].pick_random()
+		var rot := deg_to_rad(float(angle))
+		direction = Vector3(cos(rot), 0.0, sin(rot))
 
 	var roomba_instance = roomba_scene.instantiate()
 	roomba_parent_node.add_child(roomba_instance, true)
-
-	var random_angle = [45, 135, 225, 315].pick_random()
-	var random_rotation = deg_to_rad(random_angle)
-	var direction = Vector3(
-		cos(random_rotation), 0.0, sin(random_rotation)
-	)
-	roomba_instance.direction_angle = random_angle
+	roomba_instance.direction_angle = angle
 
 	roomba_spawned_count += 1
 
-	roomba_instance.setup_rpc.rpc(position.global_position, direction, roomba_spawned_count)
+	roomba_instance.setup_rpc.rpc(spawn_pos, direction, roomba_spawned_count)
 	blood_handler.roombas.append(roomba_instance)
 
 	roomba_spawn_timer.start(roomba_spawn_interval)
